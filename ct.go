@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/kljensen/snowball/english"
 )
@@ -43,6 +44,10 @@ func main() {
 
 	start := time.Now()
 
+	filter := func(c rune) bool {
+		return !unicode.IsLetter(c) && !unicode.IsNumber(c)
+	}
+
 	switch {
 	case *words:
 
@@ -59,14 +64,10 @@ func main() {
 					log.Fatal(err)
 				}
 
-				words := strings.Fields(line)
-				if *stem {
-					for i, word := range words {
-						words[i] = english.Stem(word, false)
+				for _, word := range strings.FieldsFunc(line, filter) {
+					if *stem {
+						word = english.Stem(word, false)
 					}
-				}
-
-				for _, word := range words {
 					dict[word]++
 				}
 			}
