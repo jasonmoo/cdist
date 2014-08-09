@@ -53,22 +53,47 @@ func main() {
 
 		dict := make(map[string]int)
 
-		for _, input := range inputs {
-			buf := bufio.NewReader(input)
-			for {
-				line, err := buf.ReadString('\n')
-				if err != nil {
-					if err == io.EOF {
-						break
-					}
-					log.Fatal(err)
-				}
+		if *stem {
+			stems := make(chan string, 1<<20)
+			var lines, i uint64
+			for _, input := range inputs {
+				buf := bufio.NewReader(input)
 
-				for _, word := range strings.FieldsFunc(line, filter) {
-					if *stem {
-						word = english.Stem(word, false)
+				for {
+					line, err := buf.ReadString('\n')
+					if err != nil {
+						if err == io.EOF {
+							break
+						}
+						log.Fatal(err)
 					}
-					dict[word]++
+					lines++
+
+					go func(line string) {
+						for _, word := range strings.FieldsFunc(line, filter) {
+							stems <- english.Stem(word, false)
+						}
+					}(line)
+				}
+			}
+			for ; i < lines; i++ {
+				dict[<-stems]++
+			}
+		} else {
+			for _, input := range inputs {
+				buf := bufio.NewReader(input)
+				for {
+					line, err := buf.ReadString('\n')
+					if err != nil {
+						if err == io.EOF {
+							break
+						}
+						log.Fatal(err)
+					}
+
+					for _, word := range strings.FieldsFunc(line, filter) {
+						dict[word]++
+					}
 				}
 			}
 		}
