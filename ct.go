@@ -10,9 +10,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
+	"github.com/jasonmoo/oc"
 	"github.com/kljensen/snowball/english"
 )
 
@@ -51,34 +53,62 @@ func main() {
 	switch {
 	case *words:
 
-		dict := make(map[string]int)
+		dict := oc.NewOc()
 
 		if *stem {
-			stems := make(chan string, 1<<20)
-			var lines, i uint64
-			for _, input := range inputs {
-				buf := bufio.NewReader(input)
 
+			const chunksize = 64 << 10
+
+			stems := make(chan string, chunksize)
+			stemswg := new(sync.WaitGroup)
+			stemswg.Add(1)
+			go func() {
+				for word := range stems {
+					dict.Increment(word, 1)
+				}
+				stemswg.Done()
+			}()
+
+			wg := new(sync.WaitGroup)
+
+			for _, input := range inputs {
+				br := bufio.NewReaderSize(input, 1<<20)
 				for {
-					line, err := buf.ReadString('\n')
-					if err != nil {
-						if err == io.EOF {
-							break
-						}
+					buf := make([]byte, chunksize)
+
+					n, err := br.Read(buf)
+					if err != nil && err != io.EOF {
 						log.Fatal(err)
 					}
-					lines++
+					if n == 0 {
+						break
+					}
+					buf = buf[:n]
 
-					go func(line string) {
-						for _, word := range strings.FieldsFunc(line, filter) {
+					// read to a newline to prevent
+					// spanning a word across two buffers
+					if buf[len(buf)-1] != '\n' {
+						extra, err := br.ReadBytes('\n')
+						if err != nil && err != io.EOF {
+							log.Fatal(err)
+						}
+						buf = append(buf, extra...)
+					}
+
+					wg.Add(1)
+					go func(b []byte) {
+						for _, word := range strings.FieldsFunc(string(b), filter) {
 							stems <- english.Stem(word, false)
 						}
-					}(line)
+						wg.Done()
+					}(buf)
 				}
 			}
-			for ; i < lines; i++ {
-				dict[<-stems]++
-			}
+
+			wg.Wait()
+			close(stems)
+			stemswg.Wait()
+
 		} else {
 			for _, input := range inputs {
 				buf := bufio.NewReader(input)
@@ -92,21 +122,24 @@ func main() {
 					}
 
 					for _, word := range strings.FieldsFunc(line, filter) {
-						dict[word]++
+						dict.Increment(word, 1)
 					}
 				}
 			}
 		}
 
-		for word, ct := range dict {
-			fmt.Printf("%s: %d\n", word, ct)
+		dict.SortByCt(oc.DESC)
+
+		for dict.Next() {
+			key, ct := dict.KeyValue()
+			fmt.Printf("%s: %d\n", key, ct)
 		}
 
-		fmt.Fprintf(os.Stderr, "%d words counted in %s\n", len(dict), time.Since(start))
+		fmt.Fprintf(os.Stderr, "%d words counted in %s\n", dict.Len(), time.Since(start))
 
 	default:
 
-		dict := make(map[rune]int)
+		dict := oc.NewOc()
 
 		for _, input := range inputs {
 			buf := bufio.NewReader(input)
@@ -118,15 +151,18 @@ func main() {
 					}
 					log.Fatal(err)
 				}
-				dict[r]++
+				dict.Increment(strconv.QuoteRune(r), 1)
 			}
 		}
 
-		for c, ct := range dict {
-			fmt.Printf("%s: %d\n", strconv.QuoteRune(c), ct)
+		dict.SortByCt(oc.DESC)
+
+		for dict.Next() {
+			key, ct := dict.KeyValue()
+			fmt.Printf("%s: %d\n", key, ct)
 		}
 
-		fmt.Fprintf(os.Stderr, "%d runes counted in %s\n", len(dict), time.Since(start))
+		fmt.Fprintf(os.Stderr, "%d runes counted in %s\n", dict.Len(), time.Since(start))
 
 	}
 
